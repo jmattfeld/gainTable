@@ -200,8 +200,9 @@ namespace GainTable
                             // calculate temperature correction
                             fCorTemp = tempData[frameIdx] - (dTemp[frameIdx] * (float)thisGain);
                             // calculate CTP
-                            //cvtCreateCtp(fCorTemp, chIdx + 1);
+                            cvtCreateCtp(fCorTemp, chIdx + 1);
                             // calculate corrected pressure -> tempArray
+                            //fCorrPress = cvtSingleRawPktToEu(c, lCnts);
                         }
                             // find min and max errors in pressure array for this gain
                             // if tempArray.avg(minErr,maxErr) < bestArray.avg(minErr,Maxerr)
@@ -298,8 +299,8 @@ namespace GainTable
             return fRet;
         }
 
-#if (false)
-        void cvtCreateCtp(float flTemp, int nChan)
+#if (true)
+        static void cvtCreateCtp(float flTemp, int nChan)
         {
             int p, n;
             int bFound;
