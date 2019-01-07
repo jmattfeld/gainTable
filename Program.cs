@@ -20,6 +20,7 @@ namespace GainTable
         static float[] sampleBuffer = new float[INPUT_BUFFER_LEN];
         static uint idx;
 
+        // rolling average filtering for derivative signal
         static float[] fTempHist = new float[40];
         static float[] fTempHistF1 = new float[40];
         static float[] fTempHistF2 = new float[40];
@@ -71,6 +72,7 @@ namespace GainTable
             // define some contants
             const int NUM_CHANNELS = 64;
             const int NUM_SAMPLES = 7299;
+            const int NUM_TEMPS = 8;
             const decimal MIN_GAIN = 0.00M;
             const decimal MAX_GAIN = 10.00M;
             const decimal STEP_GAIN = 0.05M;
@@ -81,7 +83,7 @@ namespace GainTable
             const string OUTPUT_PATH = "C:\\Users\\Jeremy.SV\\Desktop\\gaintable\\output\\";
             const string CAL_FILE = "CalSingleTemp.cfg";
             const string INPUT_FILE = "Ts_10_50_15.csv";
-            const string OUTPUT_FILE = "ch59_filtered_8_15.csv";
+            const string OUTPUT_FILE = "ch7_cor.csv";
             const string GAIN_FILE = "Tgain.cfg";
 
 #if (true)
@@ -103,13 +105,15 @@ namespace GainTable
             int deramt = 1;
 
             // initialize structures for input data
-            float[] tempData = new float[NUM_SAMPLES]; //just using T1 for now
+            float[,] tempData = new float[NUM_SAMPLES,NUM_TEMPS];
+            float[] fTempsNow = new float[NUM_TEMPS];
             int[,] rawData = new int[NUM_SAMPLES,NUM_CHANNELS];
 
             // array for the temperature derivative
             float[] dTemp = new float[NUM_SAMPLES];
             // initialize temporary and filtered pressure arrays for step function
             float[] tmpArr = new float[NUM_SAMPLES];
+            //float[] bestArr = new float[NUM_SAMPLES];
             float[] filteredTmpArr = new float[NUM_SAMPLES];
             // initialize array of gain values
             decimal[] gainArr = new decimal[NUM_CHANNELS];
@@ -145,7 +149,7 @@ namespace GainTable
                 // Read a line
                 // Break into tokens delimited by comma
                 string[] sToken = sLine.Split(',');
-                parseLine(tempData, rawData, sToken, NUM_CHANNELS);
+                parseLine(tempData, rawData, sToken, NUM_TEMPS, NUM_CHANNELS);
             }
             stDataFile.Close();
             Console.WriteLine("Closed file " + INPUT_FILE);
@@ -154,7 +158,7 @@ namespace GainTable
             Console.WriteLine("Calculating temperature derivative...");
             for (int i = 0; i < NUM_SAMPLES; i++)
             {
-                UpdateHistory(tempData[i], fTempHist);
+                UpdateHistory(tempData[i,0], fTempHist);
                 fFilteredTemp = RollingAvgFilter(fTempHist, avgamt);
 
                 UpdateHistory(fFilteredTemp, fTempHistF1);
@@ -200,6 +204,8 @@ namespace GainTable
             // channel index
             int chIdx;
             int frameIdx;
+            int tempIdx;
+            float fChanTemp;
             float fCorTemp;
             float thisMax;
             float thisMin;
@@ -209,7 +215,6 @@ namespace GainTable
             float curMinDelta = BIG_FLOAT;
             decimal thisGain;
             decimal curBestGain = MIN_GAIN;
-            string sPress;
 
             // for output
             //StreamWriter stOutputFile = null;
@@ -222,20 +227,27 @@ namespace GainTable
             // for each Px channel
             for (chIdx = 0; chIdx < NUM_CHANNELS; chIdx++)
             {
-                //System.Console.WriteLine("Calculating optimum gain for Channel {0}", chIdx + 1);
-                //if (chIdx != 58)
+                // can choose a channel or range of channels for plotting
+                //if (chIdx != 6)
                 //    continue;
+
                 // for each gain value in gain array from 1 to 6 in 0.05 increments
                 for (thisGain = MIN_GAIN; thisGain <= MAX_GAIN; thisGain += STEP_GAIN)
                 {
-                    //System.Console.WriteLine("Ch{0}: Trying gain={1}", chIdx + 1, thisGain);
-                    // for each frame
-                    //if (thisGain != 8.15M)
+                    // can choose a gain or range of gains for plotting
+                    //if (thisGain != 3.20M)
                     //    continue;
+
+                    // for each frame
                     for (frameIdx = 0; frameIdx < NUM_SAMPLES; frameIdx++)
                     {
                         // calculate temperature correction
-                        fCorTemp = tempData[frameIdx] - (dTemp[frameIdx] * (float)thisGain);
+                        for (tempIdx = 0; tempIdx < NUM_TEMPS; tempIdx++)
+                        {
+                            fTempsNow[tempIdx] = tempData[frameIdx, tempIdx];
+                        }
+                        fChanTemp = cvtGetChanTemp(fTempsNow, chIdx);
+                        fCorTemp = fChanTemp - (dTemp[frameIdx] * (float)thisGain);
                         // calculate CTP
                         cvtCreateCtp(fCorTemp, chIdx);
                         // tmpArr <- corrected pressure
@@ -246,7 +258,6 @@ namespace GainTable
 
                     // find min and max errors in pressure array for this gain
                     // restrict min/max to area of transient
-
                     float[] truncArr = truncateArray(filteredTmpArr, 2000, 4000);
                     thisMax = truncArr.Max();
                     idxMax = Array.IndexOf(tmpArr, thisMax);
@@ -258,6 +269,7 @@ namespace GainTable
                         curMinDelta = thisDelta;
                         curBestGain = thisGain;
                     }
+                    // debugging
                     //System.Console.WriteLine("thisMax={0} [{1}] thisMin={2} [{3}]",
                     //                            thisMax, idxMax, thisMin, idxMin);
                     //System.Console.WriteLine("thisGain={0} thisDelta={1} curMinDelta={2} curBestGain={3}",
@@ -270,8 +282,8 @@ namespace GainTable
 #if (false)
                 for (frameIdx = 0; frameIdx < NUM_SAMPLES; frameIdx++)
                 {
-                    stOutputFile.WriteLine(filteredTmpArr[frameIdx]);
-                    //stOutputFile.WriteLine(tmpArr[frameIdx]);
+                    //stOutputFile.WriteLine(filteredTmpArr[frameIdx]);
+                    stOutputFile.WriteLine(tmpArr[frameIdx]);
                 }
                 stOutputFile.Close();
 #endif
@@ -282,6 +294,197 @@ namespace GainTable
                 curBestGain = MIN_GAIN;
             }
             stGainFile.Close();
+        }
+
+        private static float cvtGetChanTemp(float[] fpTemp, int nChan)
+        {
+            float fChanTemp = 0.0F;
+
+            if ((nChan >= 0) && (nChan <= 3))
+            {
+                if (fpTemp[0] > 100.0F)
+                {
+                    fChanTemp = fpTemp[1];
+                }
+                else if (fpTemp[1] > 100.0F)
+                {
+                    fChanTemp = fpTemp[0];
+                }
+                else
+                {
+                    fChanTemp = fpTemp[0];
+                }
+            }
+            else if ((nChan >= 4) && (nChan <= 11))
+            {
+                if (fpTemp[0] > 100.0F)
+                {
+                    fChanTemp = fpTemp[1];
+                }
+                else if (fpTemp[1] > 100.0F)
+                {
+                    fChanTemp = fpTemp[0];
+                }
+                else
+                {
+                    fChanTemp = (fpTemp[0] + fpTemp[1]) / 2.0F;
+                }
+            }
+            else if ((nChan >= 12) && (nChan <= 15))
+            {
+                if (fpTemp[0] > 100.0F)
+                {
+                    fChanTemp = fpTemp[1];
+                }
+                else if (fpTemp[1] > 100.0F)
+                {
+                    fChanTemp = fpTemp[0];
+                }
+                else
+                {
+                    fChanTemp = fpTemp[1];
+                }
+
+            }
+            else if ((nChan >= 16) && (nChan <= 19))
+            {
+                if (fpTemp[2] > 100.0F)
+                {
+                    fChanTemp = fpTemp[3];
+                }
+                else if (fpTemp[3] > 100.0F)
+                {
+                    fChanTemp = fpTemp[2];
+                }
+                else
+                {
+                    fChanTemp = fpTemp[2];
+                }
+            }
+            else if ((nChan >= 20) && (nChan <= 27))
+            {
+                if (fpTemp[2] > 100.0F)
+                {
+                    fChanTemp = fpTemp[3];
+                }
+                else if (fpTemp[3] > 100.0F)
+                {
+                    fChanTemp = fpTemp[2];
+                }
+                else
+                {
+                    fChanTemp = (fpTemp[2] + fpTemp[3]) / 2.0F;
+                }
+            }
+            else if ((nChan >= 28) && (nChan <= 31))
+            {
+                if (fpTemp[2] > 100.0F)
+                {
+                    fChanTemp = fpTemp[3];
+                }
+                else if (fpTemp[3] > 100.0F)
+                {
+                    fChanTemp = fpTemp[2];
+                }
+                else
+                {
+                    fChanTemp = fpTemp[3];
+                }
+
+            }
+            else if ((nChan >= 32) && (nChan <= 35))
+            {
+                if (fpTemp[4] > 100.0F)
+                {
+                    fChanTemp = fpTemp[5];
+                }
+                else if (fpTemp[5] > 100.0F)
+                {
+                    fChanTemp = fpTemp[4];
+                }
+                else
+                {
+                    fChanTemp = fpTemp[5];  // Was 4
+                }
+            }
+            else if ((nChan >= 36) && (nChan <= 43))
+            {
+                if (fpTemp[4] > 100.0F)
+                {
+                    fChanTemp = fpTemp[5];
+                }
+                else if (fpTemp[5] > 100.0F)
+                {
+                    fChanTemp = fpTemp[4];
+                }
+                else
+                {
+                    fChanTemp = (fpTemp[4] + fpTemp[5]) / 2.0F;
+                }
+            }
+            else if ((nChan >= 44) && (nChan <= 47))
+            {
+                if (fpTemp[4] > 100.0F)
+                {
+                    fChanTemp = fpTemp[5];
+                }
+                else if (fpTemp[5] > 100.0F)
+                {
+                    fChanTemp = fpTemp[4];
+                }
+                else
+                {
+                    fChanTemp = fpTemp[4];  // Was 5
+                }
+
+            }
+            else if ((nChan >= 48) && (nChan <= 51))
+            {
+                if (fpTemp[6] > 100.0F)
+                {
+                    fChanTemp = fpTemp[7];
+                }
+                else if (fpTemp[7] > 100.0F)
+                {
+                    fChanTemp = fpTemp[6];
+                }
+                else
+                {
+                    fChanTemp = fpTemp[7];  // Was 6
+                }
+            }
+            else if ((nChan >= 52) && (nChan <= 59))
+            {
+                if (fpTemp[6] > 100.0F)
+                {
+                    fChanTemp = fpTemp[7];
+                }
+                else if (fpTemp[7] > 100.0F)
+                {
+                    fChanTemp = fpTemp[6];
+                }
+                else
+                {
+                    fChanTemp = (fpTemp[6] + fpTemp[7]) / 2.0F;
+                }
+            }
+            else if ((nChan >= 60) && (nChan <= 63))
+            {
+                if (fpTemp[6] > 100.0F)
+                {
+                    fChanTemp = fpTemp[7];
+                }
+                else if (fpTemp[7] > 100.0F)
+                {
+                    fChanTemp = fpTemp[6];
+                }
+                else
+                {
+                    fChanTemp = fpTemp[6];  // Was 7
+                }
+            }
+
+            return (fChanTemp);
         }
 
         private static float LowPassFilter(float tempin)
@@ -351,7 +554,7 @@ namespace GainTable
             nMLen[nChan - 1]++;
         }
 
-        private static void parseLine(float[] tempData, int[,] rawData, string[] sToken, int nCh)
+        private static void parseLine(float[,] tempData, int[,] rawData, string[] sToken, int nTemps, int nCh)
         {
             // temp1 is token[3] raw data is tokens[140:203]
             int i;
@@ -359,7 +562,10 @@ namespace GainTable
             int idx = Convert.ToInt16(sToken[0]) - 1;
 
             // set tempData
-            tempData[idx] = Convert.ToSingle(sToken[3]);
+            for (i = 0; i < nTemps; i++)
+            {
+                tempData[idx,i] = Convert.ToSingle(sToken[i + 3]);
+            }
 
             // set rawData
             for (i = 0; i < nCh; i++)
