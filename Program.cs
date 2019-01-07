@@ -60,10 +60,14 @@ namespace GainTable
             const decimal MIN_GAIN = 0.00M;
             const decimal MAX_GAIN = 6.00M;
             const decimal STEP_GAIN = 0.05M;
+            const decimal GAIN_TO_WRITE = 2.35M;
+            const float BIG_FLOAT = 1.0F;
 
             const string INPUT_PATH = "/home/jeremymelinda/Source/Cs_Projects/GainTable/data/";
+            const string OUTPUT_PATH = "/home/jeremymelinda/Source/Cs_Projects/GainTable/output/";
             const string CAL_FILE = "CalSingleTemp.cfg";
             const string INPUT_FILE = "Ts_10_50_15.csv";
+            const string OUTPUT_FILE = "gainOut.csv";
 
 #if (true)
             // borrowed from TransTemp (for calculating the derivative signal)
@@ -91,9 +95,8 @@ namespace GainTable
             float[] dTemp = new float[NUM_SAMPLES];
             // initialize temporary and best pressure arrays for step function
             float[] tmpArr = new float[NUM_SAMPLES];
-            float[] bestArr = new float[NUM_SAMPLES];
             // initialize array of gain values
-            float[] gainArr = new float[NUM_CHANNELS];
+            decimal[] gainArr = new decimal[NUM_CHANNELS];
             
             // process the cal file
             string sLine;
@@ -182,37 +185,76 @@ namespace GainTable
             int chIdx;
             int frameIdx;
             float fCorTemp;
+            float thisMax;
+            float thisMin;
+            float thisDelta;
+            float curMinDelta = BIG_FLOAT;
+            decimal thisGain;
+            decimal curBestGain = MIN_GAIN;
+            string sPress;
+
+            // for output
+            StreamWriter stOutputFile = null;
+            string outfile = OUTPUT_PATH + OUTPUT_FILE;
+            stOutputFile = new StreamWriter(outfile);
 
             // for each Px channel
             for (chIdx = 0; chIdx < NUM_CHANNELS; chIdx++)
             {
-                System.Console.WriteLine("Calculating optimum gain for Channel {0}", chIdx + 1);
-                if (chIdx == 6) // just do channel 7 for now
-                {
-                    decimal thisGain;
-                    // for each gain value in gain array from 1 to 6 in 0.05 increments
-                    for (thisGain = MIN_GAIN; thisGain <= MAX_GAIN; thisGain += STEP_GAIN)
-                    {
-                        //System.Console.WriteLine("Ch{0}: Trying gain={1}", chIdx + 1, thisGain);
-                        // for each frame
-                        for (frameIdx = 0; frameIdx < NUM_SAMPLES; frameIdx++)
-                        {
-                            // calculate temperature correction
-                            fCorTemp = tempData[frameIdx] - (dTemp[frameIdx] * (float)thisGain);
-                            // calculate CTP
-                            cvtCreateCtp(fCorTemp, chIdx);
-                            // calculate corrected pressure -> tempArray
-                            tmpArr[frameIdx] = cvtSingleRawPktToEu(chIdx, rawData[frameIdx, chIdx]);
-                            System.Console.WriteLine("tempArr[{0}]={1}", frameIdx, tmpArr[frameIdx]);
-                        }
-                            // find min and max errors in pressure array for this gain
-                            // if tempArray.avg(minErr,maxErr) < bestArray.avg(minErr,Maxerr)
-                                // bestArray = tempArray
-                    }
-                }
-                else
+                //System.Console.WriteLine("Calculating optimum gain for Channel {0}", chIdx + 1);
+                if (chIdx > 16)
                     continue;
+                // for each gain value in gain array from 1 to 6 in 0.05 increments
+                for (thisGain = MIN_GAIN; thisGain <= MAX_GAIN; thisGain += STEP_GAIN)
+                {
+                    //System.Console.WriteLine("Ch{0}: Trying gain={1}", chIdx + 1, thisGain);
+                    // for each frame
+                    for (frameIdx = 0; frameIdx < NUM_SAMPLES; frameIdx++)
+                    {
+                        // calculate temperature correction
+                        fCorTemp = tempData[frameIdx] - (dTemp[frameIdx] * (float)thisGain);
+                        // calculate CTP
+                        cvtCreateCtp(fCorTemp, chIdx);
+                        // tmpArr <- corrected pressure
+                        tmpArr[frameIdx] = cvtSingleRawPktToEu(chIdx, rawData[frameIdx, chIdx]);
+                        //System.Console.WriteLine("tempArr[{0}]={1}", frameIdx, tmpArr[frameIdx]);
+                    }
+
+                    // find min and max errors in pressure array for this gain
+                    // restrict min/max to area of transient
+                    float[] truncArr = truncateArray(tmpArr, 2000, 6500);
+                    thisMax = truncArr.Max();
+                    thisMin = truncArr.Min();
+                    thisDelta = thisMax - thisMin;
+                    if (thisDelta < curMinDelta)
+                    {
+                        curMinDelta = thisDelta;
+                        curBestGain = thisGain;
+                    }
+                    //System.Console.WriteLine("thisGain={0} thisDelta={1} curMinDelta={2} curBestGain={3}",
+                    //                            thisGain, thisDelta, curMinDelta, curBestGain);
+                }
+                gainArr[chIdx] = curBestGain;
+                System.Console.WriteLine("Optimum gain for ch{0}={1}", chIdx + 1, gainArr[chIdx]);
+                string sOut = Convert.ToString(gainArr[chIdx]);
+                stOutputFile.WriteLine("Ch{0}, {1}", chIdx + 1, sOut);
+
+                // reset delta, gain
+                curMinDelta = BIG_FLOAT;
+                curBestGain = MIN_GAIN;
             }
+            stOutputFile.Close();
+        }
+
+        private static float[] truncateArray(float[] tmpArr, int lowerBnd, int upperBnd)
+        {
+            float[] retArr = new float[upperBnd - lowerBnd];
+            int i,j;
+            for (i = lowerBnd, j = 0; i < upperBnd; i++, j++)
+            {
+                retArr[j] = tmpArr[i];
+            }
+            return retArr;
         }
 
         // Processes the calibration file 
