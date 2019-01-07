@@ -6,6 +6,20 @@ namespace GainTable
 {
     class Program
     {
+        // filter stuff
+        // FILTER_LEN = 25, cutoff freq = 0.0078125
+        static double[] coeffs = new double[] {
+                          0.0060796, 0.0072834, 0.0107989, 0.0163963, 0.0237011,
+                          0.0322199, 0.0413733, 0.0505369, 0.0590842, 0.0664295,
+                          0.0720689, 0.0756154, 0.0768252, 0.0756154, 0.0720689,
+                          0.0664295, 0.0590842, 0.0505369, 0.0413733, 0.0322199,
+                          0.0237012, 0.0163963, 0.0107989, 0.0072834, 0.0060796 };
+        const int FILTER_LEN = 25;
+        const uint INPUT_SAMPLE_LEN = 1;
+        const uint INPUT_BUFFER_LEN = (FILTER_LEN - 1 + INPUT_SAMPLE_LEN);
+        static float[] sampleBuffer = new float[INPUT_BUFFER_LEN];
+        static uint idx;
+
         static float[] fTempHist = new float[40];
         static float[] fTempHistF1 = new float[40];
         static float[] fTempHistF2 = new float[40];
@@ -58,16 +72,17 @@ namespace GainTable
             const int NUM_CHANNELS = 64;
             const int NUM_SAMPLES = 7299;
             const decimal MIN_GAIN = 0.00M;
-            const decimal MAX_GAIN = 6.00M;
+            const decimal MAX_GAIN = 10.00M;
             const decimal STEP_GAIN = 0.05M;
-            const decimal GAIN_TO_WRITE = 2.35M;
+            //const decimal GAIN_TO_WRITE = 2.35M;
             const float BIG_FLOAT = 1.0F;
 
-            const string INPUT_PATH = "/home/jeremymelinda/Source/Cs_Projects/GainTable/data/";
-            const string OUTPUT_PATH = "/home/jeremymelinda/Source/Cs_Projects/GainTable/output/";
+            const string INPUT_PATH = "C:\\Users\\Jeremy.SV\\Desktop\\gaintable\\data\\";
+            const string OUTPUT_PATH = "C:\\Users\\Jeremy.SV\\Desktop\\gaintable\\output\\";
             const string CAL_FILE = "CalSingleTemp.cfg";
             const string INPUT_FILE = "Ts_10_50_15.csv";
-            const string OUTPUT_FILE = "gainOut.csv";
+            const string OUTPUT_FILE = "ch59_filtered_8_15.csv";
+            const string GAIN_FILE = "Tgain.cfg";
 
 #if (true)
             // borrowed from TransTemp (for calculating the derivative signal)
@@ -93,8 +108,9 @@ namespace GainTable
 
             // array for the temperature derivative
             float[] dTemp = new float[NUM_SAMPLES];
-            // initialize temporary and best pressure arrays for step function
+            // initialize temporary and filtered pressure arrays for step function
             float[] tmpArr = new float[NUM_SAMPLES];
+            float[] filteredTmpArr = new float[NUM_SAMPLES];
             // initialize array of gain values
             decimal[] gainArr = new decimal[NUM_CHANNELS];
             
@@ -187,6 +203,8 @@ namespace GainTable
             float fCorTemp;
             float thisMax;
             float thisMin;
+            float idxMax;
+            float idxMin;
             float thisDelta;
             float curMinDelta = BIG_FLOAT;
             decimal thisGain;
@@ -194,21 +212,26 @@ namespace GainTable
             string sPress;
 
             // for output
-            StreamWriter stOutputFile = null;
-            string outfile = OUTPUT_PATH + OUTPUT_FILE;
-            stOutputFile = new StreamWriter(outfile);
+            //StreamWriter stOutputFile = null;
+            //string outfile = OUTPUT_PATH + OUTPUT_FILE;
+            //stOutputFile = new StreamWriter(outfile);
+            StreamWriter stGainFile = null;
+            string gainfile = OUTPUT_PATH + GAIN_FILE;
+            stGainFile = new StreamWriter(gainfile);
 
             // for each Px channel
             for (chIdx = 0; chIdx < NUM_CHANNELS; chIdx++)
             {
                 //System.Console.WriteLine("Calculating optimum gain for Channel {0}", chIdx + 1);
-                if (chIdx > 16)
-                    continue;
+                //if (chIdx != 58)
+                //    continue;
                 // for each gain value in gain array from 1 to 6 in 0.05 increments
                 for (thisGain = MIN_GAIN; thisGain <= MAX_GAIN; thisGain += STEP_GAIN)
                 {
                     //System.Console.WriteLine("Ch{0}: Trying gain={1}", chIdx + 1, thisGain);
                     // for each frame
+                    //if (thisGain != 8.15M)
+                    //    continue;
                     for (frameIdx = 0; frameIdx < NUM_SAMPLES; frameIdx++)
                     {
                         // calculate temperature correction
@@ -218,32 +241,70 @@ namespace GainTable
                         // tmpArr <- corrected pressure
                         tmpArr[frameIdx] = cvtSingleRawPktToEu(chIdx, rawData[frameIdx, chIdx]);
                         //System.Console.WriteLine("tempArr[{0}]={1}", frameIdx, tmpArr[frameIdx]);
+                        filteredTmpArr[frameIdx] = LowPassFilter(tmpArr[frameIdx]);
                     }
 
                     // find min and max errors in pressure array for this gain
                     // restrict min/max to area of transient
-                    float[] truncArr = truncateArray(tmpArr, 2000, 6500);
+
+                    float[] truncArr = truncateArray(filteredTmpArr, 2000, 4000);
                     thisMax = truncArr.Max();
+                    idxMax = Array.IndexOf(tmpArr, thisMax);
                     thisMin = truncArr.Min();
+                    idxMin = Array.IndexOf(tmpArr, thisMin);
                     thisDelta = thisMax - thisMin;
                     if (thisDelta < curMinDelta)
                     {
                         curMinDelta = thisDelta;
                         curBestGain = thisGain;
                     }
+                    //System.Console.WriteLine("thisMax={0} [{1}] thisMin={2} [{3}]",
+                    //                            thisMax, idxMax, thisMin, idxMin);
                     //System.Console.WriteLine("thisGain={0} thisDelta={1} curMinDelta={2} curBestGain={3}",
                     //                            thisGain, thisDelta, curMinDelta, curBestGain);
                 }
                 gainArr[chIdx] = curBestGain;
-                System.Console.WriteLine("Optimum gain for ch{0}={1}", chIdx + 1, gainArr[chIdx]);
+                System.Console.WriteLine("SET TGAIN {0} {1}", chIdx + 1, gainArr[chIdx]);
                 string sOut = Convert.ToString(gainArr[chIdx]);
-                stOutputFile.WriteLine("Ch{0}, {1}", chIdx + 1, sOut);
+                stGainFile.WriteLine("SET TGAIN {0} {1}", chIdx + 1, sOut);
+#if (false)
+                for (frameIdx = 0; frameIdx < NUM_SAMPLES; frameIdx++)
+                {
+                    stOutputFile.WriteLine(filteredTmpArr[frameIdx]);
+                    //stOutputFile.WriteLine(tmpArr[frameIdx]);
+                }
+                stOutputFile.Close();
+#endif
+
 
                 // reset delta, gain
                 curMinDelta = BIG_FLOAT;
                 curBestGain = MIN_GAIN;
             }
-            stOutputFile.Close();
+            stGainFile.Close();
+        }
+
+        private static float LowPassFilter(float tempin)
+        {
+            float acc = 0;  // accumulator
+            int k;          // coeff idx
+
+            // circular buffer index
+            uint n = idx % INPUT_BUFFER_LEN;
+
+            // write new sample to the index of the oldest sample
+            sampleBuffer[n] = tempin;
+
+            // apply filter to the input sample:
+            // y[n] = sum_{k=0}..{N-1}(h(k) * x(n-k))
+            for (k = 0; k < FILTER_LEN; k++)
+            {
+                acc += (float)coeffs[k] * sampleBuffer[(n + INPUT_BUFFER_LEN - k) % INPUT_BUFFER_LEN];
+            }
+
+            // move the index for next function call and return sum
+            idx++;
+            return acc;
         }
 
         private static float[] truncateArray(float[] tmpArr, int lowerBnd, int upperBnd)
