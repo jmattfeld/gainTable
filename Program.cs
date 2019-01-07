@@ -200,9 +200,10 @@ namespace GainTable
                             // calculate temperature correction
                             fCorTemp = tempData[frameIdx] - (dTemp[frameIdx] * (float)thisGain);
                             // calculate CTP
-                            cvtCreateCtp(fCorTemp, chIdx + 1);
+                            cvtCreateCtp(fCorTemp, chIdx);
                             // calculate corrected pressure -> tempArray
-                            //fCorrPress = cvtSingleRawPktToEu(c, lCnts);
+                            tmpArr[frameIdx] = cvtSingleRawPktToEu(chIdx, rawData[frameIdx, chIdx]);
+                            System.Console.WriteLine("tempArr[{0}]={1}", frameIdx, tmpArr[frameIdx]);
                         }
                             // find min and max errors in pressure array for this gain
                             // if tempArray.avg(minErr,maxErr) < bestArray.avg(minErr,Maxerr)
@@ -300,7 +301,7 @@ namespace GainTable
         }
 
 #if (true)
-        static void cvtCreateCtp(float flTemp, int nChan)
+        private static void cvtCreateCtp(float flTemp, int nChan)
         {
             int p, n;
             int bFound;
@@ -454,7 +455,33 @@ namespace GainTable
             // Calculate the slope and offset for the index conversion
             fMNdxCtp[nChan] = (0.0F - (nNumCalP - 1)) / (fCCounts[nChan,0] - fCCounts[nChan,nNumCalP - 1]);
             fBNdxCtp[nChan] = (nNumCalP - 1) - (fMNdxCtp[nChan] * fCCounts[nChan,nNumCalP - 1]);
+        }
 
+        private static float cvtSingleRawPktToEu(int c, long lCounts)
+        {
+            int n;
+            float fPress;
+
+            // Find table index
+            n = (int)(fMNdxCtp[c] * lCounts + fBNdxCtp[c]);
+            if (n < 0)
+                n = 0;
+            else if (n >= nCNumPress[c])
+                n = (nCNumPress[c] - 1);
+
+            // Calculate pressure from counts
+            fPress = (fMctp[c,n] * lCounts) + fBctp[c,n];
+
+            //	sprintf(szOneLine,"cvtSingleRawPktToEu %d %d %ld %f %f %f %f %f",c,n,lCounts,
+            //			pCtdsActive->fMctp[c][n],
+            //			pCtdsActive->fBctp[c][n],
+            //			pCtdsActive->fMNdxCtp[c],
+            //			pCtdsActive->fBNdxCtp[c],
+            //			fPress);
+            //	strcpy(szOneLineCr,szOneLine);
+            //	strcat(szOneLineCr,"\r\n");
+
+            return (fPress);
         }
 #endif
     }
